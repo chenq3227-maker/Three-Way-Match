@@ -1,0 +1,6 @@
+{
+  "name": "Three-Way Matching System",
+  "description": "A compliant accounting information system for three-way matching, document extraction, mapping review, exception log audit, and Excel report export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
