@@ -297,19 +297,22 @@ export function formatStoredDateForDisplay(storedDate: string): string {
   // YYYY-MM-DD
   const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (match) {
-    return `${match[3]}/${match[2]}/${match[1]}`;
+    return trimmed; // Already YYYY-MM-DD
   }
 
-  // If already in DD/MM/YYYY format, return as-is
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed)) {
-    return trimmed;
+  // If already in DD/MM/YYYY format, transform it
+  const dmyMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmyMatch) {
+    const d = dmyMatch[1].padStart(2, '0');
+    const m = dmyMatch[2].padStart(2, '0');
+    const y = dmyMatch[3];
+    return `${y}-${m}-${d}`;
   }
 
-  // Fallback to formatDate and transform
+  // Fallback to formatDate (which returns YYYY-MM-DD)
   const parsed = formatDate(trimmed);
-  const secondMatch = parsed.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (secondMatch) {
-    return `${secondMatch[3]}/${secondMatch[2]}/${secondMatch[1]}`;
+  if (parsed) {
+    return parsed;
   }
 
   return trimmed;

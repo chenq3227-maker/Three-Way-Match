@@ -1,3 +1,4 @@
+import { getFormattedTimestamp } from "../lib/timestamp";
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -515,7 +516,7 @@ export function exportMatchingResults(
 
       const isConfirmed = !!line.confirmedByHuman;
       const verifiedBy = isConfirmed ? (line.humanReview?.reviewerName || "App 1 User") : "";
-      const verificationTime = isConfirmed ? (line.humanReview?.timestamp ? makeExcelCell(line.humanReview.timestamp, "date") : makeExcelCell(new Date().toISOString(), "date")) : "";
+      const verificationTime = isConfirmed ? (line.humanReview?.timestamp ? makeExcelCell(line.humanReview.timestamp, "date") : makeExcelCell(getFormattedTimestamp(), "date")) : "";
 
       mappingRows.push([
         "Invoice",
@@ -834,7 +835,7 @@ export function exportMatchingResults(
       madamLimAuthorisationStatus,
       reminderStatus,
       paymentStatus,
-      new Date().toLocaleString() // Timestamp with date/time
+      makeExcelCell(getFormattedTimestamp(), "date")
     ]);
   });
 
@@ -845,7 +846,7 @@ export function exportMatchingResults(
   // ==========================================
   // WRITE AND DOWNLOAD WORKBOOK
   // ==========================================
-  XLSX.writeFile(wb, `AP-Three-Way-Match-Audit-Trail-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  XLSX.writeFile(wb, `AP-Three-Way-Match-Audit-Trail-${getFormattedTimestamp().slice(0, 10)}.xlsx`);
 }
 
 /**

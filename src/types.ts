@@ -11,8 +11,8 @@ export interface InvoiceLine {
   sourceWorkbookName?: string;
   supplierName: string;
   invoiceNumber: string;
-  invoiceDate: string; // stored as DD/MM/YYYY
-  invoiceDueDate: string; // stored as DD/MM/YYYY
+  invoiceDate: string; // stored as YYYY-MM-DD
+  invoiceDueDate: string; // stored as YYYY-MM-DD
   billTo: string;
   poNumber: string;
   lineNumber: string;
@@ -115,7 +115,7 @@ export interface InvoiceLine {
 export interface POLine {
   id: string; // Generated frontend ID
   poNumber: string;
-  poDate: string; // stored as DD/MM/YYYY
+  poDate: string; // stored as YYYY-MM-DD
   buyer?: string;
   supplier: string;
   supplierAddress?: string;
@@ -127,7 +127,7 @@ export interface POLine {
   quantityOrdered: number;
   unitPrice: number;
   totalAmount: number;
-  expectedDelivery: string; // stored as DD/MM/YYYY
+  expectedDelivery: string; // stored as YYYY-MM-DD
   sourceFileName: string;
   sourceFileSize?: number;
   sourceFileHash?: string;
@@ -164,7 +164,7 @@ export interface POLine {
 export interface GRNLine {
   id: string; // Generated frontend ID
   grnNumber: string;
-  grnDate: string; // stored as DD/MM/YYYY
+  grnDate: string; // stored as YYYY-MM-DD
   poNumber: string;
   supplier: string;
   warehouse?: string;

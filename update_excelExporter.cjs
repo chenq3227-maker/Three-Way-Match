@@ -1,39 +1,40 @@
 const fs = require('fs');
 let code = fs.readFileSync('src/lib/excelExporter.ts', 'utf8');
 
-const targetOld = `    // Map App 3 Handoff Status Rules
-    let app3IntakeStatus = "";`;
+const targetOld = `    const isTimestamp = typeof value === "string" && (value.includes(":") || value.toLowerCase().includes("m"));
+    
+    return {
+      __isFormattedCell: true,
+      cell: { 
+         t: "d", 
+         v: parsedDate, 
+         z: "dd/mm/yyyy" 
+       }
+    };`;
 
-const targetNew = `    // Accepted Payment Method resolution
-    const paymentMethodsSet = new Set<string>();
-    invoiceLines.forEach(l => {
-      const pm = (l.acceptedPaymentMethod || "").trim();
-      if (pm) {
-        paymentMethodsSet.add(pm);
-      }
-    });
-
-    let finalPaymentMethod = "Not Provided";
-    if (paymentMethodsSet.size === 1) {
-      finalPaymentMethod = Array.from(paymentMethodsSet)[0];
-    } else if (paymentMethodsSet.size > 1) {
-      finalPaymentMethod = "Confirmation Required";
-    }
-
-    // Map App 3 Handoff Status Rules
-    let app3IntakeStatus = "";`;
+const targetNew = `    const isTimestamp = typeof value === "string" && (value.includes(":") || value.toLowerCase().includes("m"));
+    
+    return {
+      __isFormattedCell: true,
+      cell: { 
+         t: "d", 
+         v: parsedDate, 
+         z: isTimestamp ? "yyyy-mm-dd hh:mm:ss" : "yyyy-mm-dd" 
+       }
+    };`;
 
 code = code.replace(targetOld, targetNew);
 
-const rowTargetOld = `      refLine.paymentTerms || "",
-      refLine.acceptedPaymentMethod || "",
-      refLine.bankDetails || "",`;
+// Also fix new Date().toLocaleString()
+const dateOld = `paymentStatus,
+      new Date().toLocaleString() // Timestamp with date/time
+    ]);`;
 
-const rowTargetNew = `      refLine.paymentTerms || "",
-      finalPaymentMethod,
-      refLine.bankDetails || "",`;
+const dateNew = `paymentStatus,
+      makeExcelCell(new Date().toLocaleString(), "date")
+    ]);`;
 
-code = code.replace(rowTargetOld, rowTargetNew);
+code = code.replace(dateOld, dateNew);
 
 fs.writeFileSync('src/lib/excelExporter.ts', code);
 console.log("Updated excelExporter.ts");

@@ -1,3 +1,4 @@
+import { getFormattedTimestamp } from "../lib/timestamp";
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -212,7 +213,7 @@ export default function Step1InvoiceRegister({
           ...rec,
           reviewStatus: "Automatically Standardised" as const,
           confirmedBy: "Lead AP Auditor",
-          confirmedAt: new Date().toISOString()
+          confirmedAt: getFormattedTimestamp()
         };
       }
       return rec;
@@ -231,7 +232,7 @@ export default function Step1InvoiceRegister({
           alternativeInterpretation: prevStd,
           reviewStatus: "Human Corrected" as const,
           confirmedBy: "Lead AP Auditor",
-          confirmedAt: new Date().toISOString(),
+          confirmedAt: getFormattedTimestamp(),
           userCorrection: prevAlt
         };
       }
@@ -241,14 +242,14 @@ export default function Step1InvoiceRegister({
   };
 
   const handleCorrectDateRecord = (id: string, textValue: string) => {
-    const match = textValue.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    const match = textValue.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
     if (!match) {
-      alert("Please enter a valid date in DD/MM/YYYY format.");
+      alert("Please enter a valid date in YYYY-MM-DD format.");
       return;
     }
-    const d = parseInt(match[1], 10);
+    const y = parseInt(match[1], 10);
     const m = parseInt(match[2], 10);
-    const y = parseInt(match[3], 10);
+    const d = parseInt(match[3], 10);
 
     const { isValidCalendarDate } = require("../lib/dateStandardiser");
     if (!isValidCalendarDate(y, m, d)) {
@@ -263,7 +264,7 @@ export default function Step1InvoiceRegister({
           standardisedDate: textValue,
           reviewStatus: "Human Corrected" as const,
           confirmedBy: "Lead AP Auditor",
-          confirmedAt: new Date().toISOString(),
+          confirmedAt: getFormattedTimestamp(),
           userCorrection: textValue
         };
       }
@@ -285,7 +286,7 @@ export default function Step1InvoiceRegister({
           alternativeInterpretation: result.alternative,
           reviewStatus: "Automatically Standardised" as const,
           confirmedBy: "Lead AP Auditor",
-          confirmedAt: new Date().toISOString(),
+          confirmedAt: getFormattedTimestamp(),
           detectionMethod: `Bulk Confirmed Column Format (${scheme === "day-first" ? "Day-First" : "Month-First"})`
         };
       }
@@ -854,7 +855,7 @@ export default function Step1InvoiceRegister({
       previousMappedField,
       newMappedField,
       changedBy: "Lead AP Auditor",
-      timestamp: new Date().toLocaleString()
+      timestamp: getFormattedTimestamp()
     };
 
     setMappingChangeHistory([...mappingChangeHistory, logEntry]);
@@ -905,7 +906,7 @@ export default function Step1InvoiceRegister({
 
     if (prevValue === value) return;
 
-    const timestamp = new Date().toLocaleString();
+    const timestamp = getFormattedTimestamp();
     const changedBy = "Lead AP Auditor";
     
     // Log choice change
@@ -1044,7 +1045,7 @@ export default function Step1InvoiceRegister({
             previousMappedField: "Original Confirmed Value",
             newMappedField: ch,
             changedBy: "AP Specialist",
-            timestamp: new Date().toLocaleString()
+            timestamp: getFormattedTimestamp()
           });
         });
 
@@ -1116,7 +1117,7 @@ export default function Step1InvoiceRegister({
       worksheetOrigin: "Manual Entry Form",
       supplierName: mSupplierName,
       invoiceNumber: mInvoiceNumber,
-      invoiceDate: formatDate(mInvoiceDate || new Date().toISOString().slice(0, 10)),
+      invoiceDate: formatDate(mInvoiceDate || getFormattedTimestamp().slice(0, 10)),
       invoiceDueDate: formatDate(mInvoiceDueDate),
       billTo: "Internal AP",
       poNumber: mPoNumber || "Missing PO",
@@ -1802,7 +1803,7 @@ export default function Step1InvoiceRegister({
                                   type="text"
                                   value={dateCorrectionValue}
                                   onChange={(e) => setDateCorrectionValue(e.target.value)}
-                                  placeholder="DD/MM/YYYY"
+                                  placeholder="YYYY-MM-DD"
                                   className="border border-indigo-300 rounded px-1.5 py-0.5 w-24 text-xs font-mono bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                                 />
                               ) : (
@@ -1891,7 +1892,7 @@ export default function Step1InvoiceRegister({
                                         setDateCorrectionValue(rec.standardisedDate === "INVALID" ? "" : rec.standardisedDate);
                                       }}
                                       className="text-indigo-600 hover:text-indigo-800 font-bold text-[10px] bg-indigo-50 hover:bg-indigo-100 px-1.5 py-0.5 rounded border border-indigo-150"
-                                      title="Type custom DD/MM/YYYY date"
+                                      title="Type custom YYYY-MM-DD date"
                                     >
                                       Correct
                                     </button>

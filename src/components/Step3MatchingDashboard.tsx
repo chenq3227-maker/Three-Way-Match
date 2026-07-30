@@ -1,3 +1,4 @@
+import { getFormattedTimestamp } from "../lib/timestamp";
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -218,7 +219,7 @@ export default function Step3MatchingDashboard({
       }
     }
 
-    const timestamp = new Date().toLocaleString();
+    const timestamp = getFormattedTimestamp();
     const updatedInvoices = invoices.map((inv) => {
       // If multi-line, update other lines of the same invoice as well to ensure roll-up consistency
       if (inv.invoiceNumber === selectedLine?.invoiceNumber) {

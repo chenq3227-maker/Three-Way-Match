@@ -1,3 +1,4 @@
+import { getFormattedTimestamp } from "./lib/timestamp";
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -199,7 +200,7 @@ export default function App() {
 
         if (statusChanged && newMappingLogs.length === 0) {
           updatedAuditLog.push({
-            timestamp: new Date().toLocaleString(),
+            timestamp: getFormattedTimestamp(),
             previousStatus: prevLine.overallStatus || "Unmatched",
             updatedStatus: newLine.overallStatus || "Unmatched",
             reason: `Rematch executed due to input/mapping changes. Details: ${newLine.reason || "None"}`,

@@ -1,3 +1,4 @@
+import { getFormattedTimestamp } from "../lib/timestamp";
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -90,7 +91,7 @@ export default function Step2POGRNInput({ poLines, grnLines, onDataConfirmed, on
     const newPO: POLine = {
       id: `PO-${mPoNo}-${Math.floor(Math.random() * 1000)}`,
       poNumber: mPoNo,
-      poDate: formatDate(mPoDate || new Date().toISOString().slice(0, 10)),
+      poDate: formatDate(mPoDate || getFormattedTimestamp().slice(0, 10)),
       supplier: mPoSupplier,
       itemDescription: mPoItemDesc,
       quantityOrdered: Number(mPoQty),
@@ -121,7 +122,7 @@ export default function Step2POGRNInput({ poLines, grnLines, onDataConfirmed, on
     const newGRN: GRNLine = {
       id: `GRN-${mGrnNo}-${Math.floor(Math.random() * 1000)}`,
       grnNumber: mGrnNo,
-      grnDate: formatDate(mGrnDate || new Date().toISOString().slice(0, 10)),
+      grnDate: formatDate(mGrnDate || getFormattedTimestamp().slice(0, 10)),
       poNumber: mGrnPoNo,
       supplier: mGrnSupplier || "",
       itemDescription: mGrnItemDesc,
@@ -296,7 +297,7 @@ export default function Step2POGRNInput({ poLines, grnLines, onDataConfirmed, on
     // Apply verified records
     const verifiedRecord = {
       reviewerName,
-      verifiedAt: `${new Date().toLocaleString()} - Notes: ${verificationNotes || "Mappings Confirmed"}`
+      verifiedAt: `${getFormattedTimestamp()} - Notes: ${verificationNotes || "Mappings Confirmed"}`
     };
     
     const finalPOs = pendingExcelData.newPOs.map((p: any) => ({ ...p, verifiedRecord }));
@@ -524,7 +525,7 @@ export default function Step2POGRNInput({ poLines, grnLines, onDataConfirmed, on
       }
     }
 
-    const timestamp = new Date().toLocaleString();
+    const timestamp = getFormattedTimestamp();
 
     if (currentScanDocType === "po") {
       const items = extractedData.items || [];
@@ -1062,7 +1063,7 @@ export default function Step2POGRNInput({ poLines, grnLines, onDataConfirmed, on
               {extractedData && (scanDocType === "po" ? (
                 <>
                   {renderExtractedField("PO Number", "poNumber", extractedData.poNumber?.value, extractedData.poNumber?.status, handleExtractedFieldChange, extractedData.poNumber?.originalText, extractedData.poNumber?.note)}
-                  {renderExtractedField("PO Date (DD/MM/YYYY)", "poDate", extractedData.poDate?.value, extractedData.poDate?.status, handleExtractedFieldChange, extractedData.poDate?.originalText, extractedData.poDate?.note)}
+                  {renderExtractedField("PO Date (YYYY-MM-DD)", "poDate", extractedData.poDate?.value, extractedData.poDate?.status, handleExtractedFieldChange, extractedData.poDate?.originalText, extractedData.poDate?.note)}
                   {renderExtractedField("Buyer", "buyer", extractedData.buyer?.value, extractedData.buyer?.status, handleExtractedFieldChange, extractedData.buyer?.originalText, extractedData.buyer?.note)}
                   {renderExtractedField("Supplier", "supplier", extractedData.supplier?.value, extractedData.supplier?.status, handleExtractedFieldChange, extractedData.supplier?.originalText, extractedData.supplier?.note)}
                   {renderExtractedField("Supplier Address", "supplierAddress", extractedData.supplierAddress?.value, extractedData.supplierAddress?.status, handleExtractedFieldChange, extractedData.supplierAddress?.originalText, extractedData.supplierAddress?.note)}
@@ -1075,7 +1076,7 @@ export default function Step2POGRNInput({ poLines, grnLines, onDataConfirmed, on
               ) : (
                 <>
                   {renderExtractedField("GRN Number", "grnNumber", extractedData.grnNumber?.value, extractedData.grnNumber?.status, handleExtractedFieldChange, extractedData.grnNumber?.originalText, extractedData.grnNumber?.note)}
-                  {renderExtractedField("GRN Date (DD/MM/YYYY)", "grnDate", extractedData.grnDate?.value, extractedData.grnDate?.status, handleExtractedFieldChange, extractedData.grnDate?.originalText, extractedData.grnDate?.note)}
+                  {renderExtractedField("GRN Date (YYYY-MM-DD)", "grnDate", extractedData.grnDate?.value, extractedData.grnDate?.status, handleExtractedFieldChange, extractedData.grnDate?.originalText, extractedData.grnDate?.note)}
                   {renderExtractedField("PO Number Ref", "poNumber", extractedData.poNumber?.value, extractedData.poNumber?.status, handleExtractedFieldChange, extractedData.poNumber?.originalText, extractedData.poNumber?.note)}
                   {renderExtractedField("Supplier", "supplier", extractedData.supplier?.value, extractedData.supplier?.status, handleExtractedFieldChange, extractedData.supplier?.originalText, extractedData.supplier?.note)}
                   {renderExtractedField("Warehouse", "warehouse", extractedData.warehouse?.value, extractedData.warehouse?.status, handleExtractedFieldChange, extractedData.warehouse?.originalText, extractedData.warehouse?.note)}
