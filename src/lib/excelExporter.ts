@@ -742,6 +742,22 @@ export function exportMatchingResults(
     });
     const exceptionSummary = Array.from(excTypesSet).join("; ") || "";
 
+    // Accepted Payment Method resolution
+    const paymentMethodsSet = new Set<string>();
+    invoiceLines.forEach(l => {
+      const pm = (l.acceptedPaymentMethod || "").trim();
+      if (pm) {
+        paymentMethodsSet.add(pm);
+      }
+    });
+
+    let finalPaymentMethod = "Not Provided";
+    if (paymentMethodsSet.size === 1) {
+      finalPaymentMethod = Array.from(paymentMethodsSet)[0];
+    } else if (paymentMethodsSet.size > 1) {
+      finalPaymentMethod = "Confirmation Required";
+    }
+
     // Map App 3 Handoff Status Rules
     let app3IntakeStatus = "";
     let departmentApprovalStatus = "";
@@ -798,7 +814,7 @@ export function exportMatchingResults(
       makeExcelCell(refLine.invoiceTotal, "currency"), // Only once!
       refLine.currency,
       refLine.paymentTerms || "",
-      refLine.acceptedPaymentMethod || "",
+      finalPaymentMethod,
       refLine.bankDetails || "",
       refLine.bankAccountOrIban || "", // Bank Account / IBAN
       refLine.paymentReference || "",
