@@ -7,6 +7,7 @@ import { getFormattedTimestamp } from "../lib/timestamp";
 import * as XLSX from "xlsx-js-style";
 import { InvoiceLine, POLine, GRNLine } from "../types";
 import { parseDDMMYYYY } from "./excelParser";
+import { getLineFinalStatus } from "./statusHelper";
 
 /**
  * Normalizes text for matching comparisons
@@ -68,7 +69,9 @@ function formatStatusWithEmoji(status: string | undefined): string {
   if (!status) return "⚪ Unmatched";
   if (status === "On Hold") return "🔴 On Hold";
   if (status === "Review Required") return "🟡 Review Required";
-  if (status === "Matched – Awaiting Department Approval") return "🟢 Awaiting Department Approval";
+  if (status === "Matched – Awaiting Human Sign-off") return "🟢 Matched – Awaiting Human Sign-off";
+  if (status === "Matched – Awaiting Department Approval") return "🟢 Matched – Awaiting Human Sign-off";
+  if (status === "Resolved – Ready for Payment Authorisation") return "🔵 Resolved – Ready for Payment Authorisation";
   return status;
 }
 
@@ -238,7 +241,7 @@ export function exportMatchingResults(
 
     const originalSystemResult = exceptions.length > 0
       ? (exceptions.some(e => e.severity === "On Hold") ? "On Hold" : "Review Required")
-      : "Matched – Awaiting Department Approval";
+      : "Matched – Awaiting Human Sign-off";
 
     matchResultsRows.push([
       line.recordId,
@@ -301,7 +304,7 @@ export function exportMatchingResults(
       qtyDifferenceGRN !== "" ? makeExcelCell(qtyDifferenceGRN, "number") : "",
       unitPriceDifference !== "" ? makeExcelCell(unitPriceDifference, "currency") : "",
       amountDifference !== "" ? makeExcelCell(amountDifference, "currency") : "",
-      line.overallStatus || "Unmatched",
+      getLineFinalStatus(line),
       exceptionTypesStr,
       reasonsStr,
       actionsStr,
@@ -348,7 +351,7 @@ export function exportMatchingResults(
   ]);
 
   invoices
-    .filter((line) => line.overallStatus === "Review Required" || line.overallStatus === "On Hold")
+    .filter((line) => line.exceptions && line.exceptions.length > 0)
     .forEach((line) => {
       const matchedPO = findMatchedPO(line, poLines);
       const itemGRNs = findMatchedGRNs(line, grnLines);
@@ -692,141 +695,56 @@ export function exportMatchingResults(
     "Last Updated"
   ]);
 
-  // Group invoices by invoiceNumber and supplierName to have 1 row per invoice
-  const invoicesGrouped: Record<string, InvoiceLine[]> = {};
   invoices.forEach((line) => {
-    const key = `${line.invoiceNumber}-${line.supplierName}`;
-    if (!invoicesGrouped[key]) {
-      invoicesGrouped[key] = [];
-    }
-    invoicesGrouped[key].push(line);
-  });
-
-  Object.keys(invoicesGrouped).forEach((key) => {
-    const invoiceLines = invoicesGrouped[key];
-    const refLine = invoiceLines[0];
-
-    // Combine POs
-    const poSet = new Set<string>();
-    invoiceLines.forEach(l => { if (l.poNumber) poSet.add(l.poNumber); });
-    const poNumbersStr = Array.from(poSet).join(", ") || "";
-
-    // Combine GRNs
-    const grnSet = new Set<string>();
-    invoiceLines.forEach(l => {
-      const itemGRNs = findMatchedGRNs(l, grnLines);
-      itemGRNs.forEach(g => { if (g.grnNumber) grnSet.add(g.grnNumber); });
-    });
-    const grnNumbersStr = Array.from(grnSet).join(", ") || "";
-
-    // Overall Rolled-up Status (Most severe line status takes precedence)
-    const lineStatuses = invoiceLines.map(l => l.overallStatus);
-    let rolledStatus: "On Hold" | "Review Required" | "Matched – Awaiting Department Approval" = "Matched – Awaiting Department Approval";
-    
-    if (lineStatuses.some(s => s === "On Hold")) {
-      rolledStatus = "On Hold";
-    } else if (lineStatuses.some(s => s === "Review Required")) {
-      rolledStatus = "Review Required";
-    } else if (lineStatuses.some(s => s === "Matched – Awaiting Department Approval")) {
-      rolledStatus = "Matched – Awaiting Department Approval";
+    if (getLineFinalStatus(line) !== "Resolved – Ready for Payment Authorisation") {
+      return;
     }
 
-    // Exception Summary
-    const excTypesSet = new Set<string>();
-    invoiceLines.forEach(l => {
-      if (l.exceptionType && l.exceptionType !== "None") {
-        excTypesSet.add(l.exceptionType);
-      }
-      if (l.exceptions) {
-        l.exceptions.forEach(e => excTypesSet.add(e.type));
-      }
-    });
-    const exceptionSummary = Array.from(excTypesSet).join("; ") || "";
+    const itemGRNs = findMatchedGRNs(line, grnLines);
+    const grnNumbersStr = itemGRNs.map(g => g.grnNumber).filter(Boolean).join(", ") || "";
 
-    // Accepted Payment Method resolution
-    const paymentMethodsSet = new Set<string>();
-    invoiceLines.forEach(l => {
-      const pm = (l.acceptedPaymentMethod || "").trim();
-      if (pm) {
-        paymentMethodsSet.add(pm);
-      }
-    });
+    const exceptions = line.exceptions || [];
+    const exceptionSummary = exceptions.map(e => e.type).filter(Boolean).join("; ") || "None";
 
-    let finalPaymentMethod = "Not Provided";
-    if (paymentMethodsSet.size === 1) {
-      finalPaymentMethod = Array.from(paymentMethodsSet)[0];
-    } else if (paymentMethodsSet.size > 1) {
-      finalPaymentMethod = "Confirmation Required";
-    }
+    const finalPaymentMethod = (line.acceptedPaymentMethod || "Not Provided").trim();
 
     // Map App 3 Handoff Status Rules
-    let app3IntakeStatus = "";
-    let departmentApprovalStatus = "";
-    let paymentEligibility = "";
-    let blockingReason = "";
-    let madamLimAuthorisationStatus = "";
-    let reminderStatus = "";
-    let paymentStatus = "";
-    let suggestedNextAction = "";
-
-    if (rolledStatus === "Matched – Awaiting Department Approval" ) {
-      app3IntakeStatus = "Ready for Department Approval";
-      departmentApprovalStatus = "Pending";
-      paymentEligibility = "No – Department Approval Pending";
-      madamLimAuthorisationStatus = "Not Requested";
-      reminderStatus = "Not Started";
-      paymentStatus = "Not Scheduled";
-      suggestedNextAction = "Route invoice details to department head for approval.";
-      blockingReason = "";
-    } else if (rolledStatus === "Review Required") {
-      app3IntakeStatus = "Blocked – Review Required";
-      departmentApprovalStatus = "Blocked";
-      paymentEligibility = "No – Exception Unresolved";
-      madamLimAuthorisationStatus = "Not Requested";
-      reminderStatus = "Not Started";
-      paymentStatus = "Blocked";
-      suggestedNextAction = "Complete discrepancy investigation in reconciliation dashboard.";
-      blockingReason = "Review Required exceptions pending human resolution: " + exceptionSummary;
-    } else if (rolledStatus === "On Hold") {
-      app3IntakeStatus = "Blocked – On Hold";
-      departmentApprovalStatus = "Blocked";
-      paymentEligibility = "No – On Hold";
-      madamLimAuthorisationStatus = "Not Requested";
-      reminderStatus = "Not Started";
-      paymentStatus = "Blocked";
-      suggestedNextAction = "Coordinate with procurement and supplier to resolve hold exception.";
-      blockingReason = "On Hold exception flagged: " + exceptionSummary;
-    }
-
-    // Bank Details Verification Status
-    const isBankVerified = invoiceLines.some(l => l.confirmedByHuman);
-    const bankDetailsVerificationStatus = isBankVerified ? "Verified by Human" : "Not Verified";
+    const rolledStatus = "Resolved – Ready for Payment Authorisation";
+    const app3IntakeStatus = "Ready to begin payment authorisation";
+    const departmentApprovalStatus = "Approved";
+    const paymentEligibility = "Yes – Ready for Payment Authorisation";
+    const madamLimAuthorisationStatus = "Not Requested";
+    const reminderStatus = "Not Started";
+    const paymentStatus = "Not Scheduled";
+    const suggestedNextAction = "Proceed with payment authorisation.";
+    const blockingReason = "";
+    const bankDetailsVerificationStatus = line.confirmedByHuman ? "Verified by Human" : "Not Verified";
 
     handoffRows.push([
-      `HO-REC-${refLine.invoiceNumber}`,
-      refLine.invoiceNumber,
-      refLine.supplierName,
-      refLine.supplierContactDetails || "",
-      refLine.businessRegTaxId || "",
-      makeExcelCell(refLine.invoiceDate, "date"),
-      makeExcelCell(refLine.invoiceDueDate, "date"),
-      poNumbersStr,
+      `HO-REC-${line.recordId}`,
+      line.invoiceNumber,
+      line.supplierName,
+      line.supplierContactDetails || "",
+      line.businessRegTaxId || "",
+      makeExcelCell(line.invoiceDate, "date"),
+      makeExcelCell(line.invoiceDueDate, "date"),
+      line.poNumber || "",
       grnNumbersStr,
-      makeExcelCell(refLine.invoiceTotal, "currency"), // Only once!
-      refLine.currency,
-      refLine.paymentTerms || "",
+      makeExcelCell(line.invoiceTotal, "currency"),
+      line.currency,
+      line.paymentTerms || "",
       finalPaymentMethod,
-      refLine.bankDetails || "",
-      refLine.bankAccountOrIban || "", // Bank Account / IBAN
-      refLine.paymentReference || "",
-      refLine.latePaymentTerms || "",
-      refLine.sourceFileName || "",
-      refLine.sourceWorkbookName || "",
+      line.bankDetails || "",
+      line.bankAccountOrIban || "",
+      line.paymentReference || "",
+      line.latePaymentTerms || "",
+      line.sourceFileName || "",
+      line.sourceWorkbookName || "",
       rolledStatus,
       exceptionSummary,
       departmentApprovalStatus,
-      "", // Department Approved By (must never infer)
-      "", // Department Approval Date (must never infer)
+      line.humanReview?.reviewerName || "",
+      line.humanReview?.timestamp ? makeExcelCell(line.humanReview.timestamp, "date") : "",
       app3IntakeStatus,
       paymentEligibility,
       blockingReason,
@@ -839,6 +757,13 @@ export function exportMatchingResults(
     ]);
   });
 
+  // If no invoice is resolved, still export the App 3 Handoff worksheet with its column headers and a clear message that no records are currently eligible.
+  if (handoffRows.length === 1) {
+    const emptyRow = Array(33).fill("");
+    emptyRow[0] = "No records are currently eligible for App 3 Handoff. All matching results and exceptions are preserved in other sheets.";
+    handoffRows.push(emptyRow);
+  }
+
   const wsHandoff = buildWorksheet(handoffRows);
   XLSX.utils.book_append_sheet(wb, wsHandoff, "App 3 Handoff");
 
@@ -846,7 +771,7 @@ export function exportMatchingResults(
   // ==========================================
   // WRITE AND DOWNLOAD WORKBOOK
   // ==========================================
-  XLSX.writeFile(wb, `AP-Three-Way-Match-Audit-Trail-${getFormattedTimestamp().slice(0, 10)}.xlsx`);
+  XLSX.writeFile(wb, `MatchGuard-Audit-Trail-${getFormattedTimestamp().slice(0, 10)}.xlsx`);
 }
 
 /**

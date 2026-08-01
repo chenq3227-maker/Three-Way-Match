@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { InvoiceLine, POLine, GRNLine, MatchSummary } from "../types";
+import { getLineFinalStatus } from "../lib/statusHelper";
 import { exportMatchingResults } from "../lib/excelExporter";
 import { normalizeText, isDescriptionMatch } from "../lib/matchingEngine";
 import { formatStoredDateForDisplay } from "../lib/excelParser";
@@ -72,6 +73,7 @@ export default function Step3MatchingDashboard({
     let matchedCount = 0;
     let reviewCount = 0;
     let onHoldCount = 0;
+    let resolvedCount = 0;
 
     // Track unique invoices to get total invoice values accurately
     const uniqueInvoiceTotals = new Map<string, number>();
@@ -79,15 +81,19 @@ export default function Step3MatchingDashboard({
 
     invoices.forEach((line) => {
       uniqueInvoiceTotals.set(line.invoiceNumber, line.invoiceTotal);
-      if (line.overallStatus === "On Hold") {
+      
+      const finalStatus = getLineFinalStatus(line);
+      if (finalStatus === "On Hold") {
         uniqueInvoicesOnHold.set(line.invoiceNumber, line.invoiceTotal);
       }
 
-      if (line.overallStatus === "Matched – Awaiting Department Approval" ) {
+      if (finalStatus === "Resolved – Ready for Payment Authorisation") {
+        resolvedCount++;
+      } else if (finalStatus === "Matched – Awaiting Human Sign-off") {
         matchedCount++;
-      } else if (line.overallStatus === "Review Required") {
+      } else if (finalStatus === "Review Required") {
         reviewCount++;
-      } else if (line.overallStatus === "On Hold") {
+      } else if (finalStatus === "On Hold") {
         onHoldCount++;
       }
     });
@@ -101,6 +107,7 @@ export default function Step3MatchingDashboard({
       matched: matchedCount,
       reviewRequired: reviewCount,
       onHold: onHoldCount,
+      resolved: resolvedCount,
       totalInvoiceValue: totalVal,
       totalValueOnHold: totalOnHoldVal,
     };
@@ -127,11 +134,15 @@ export default function Step3MatchingDashboard({
           line.poNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
           line.itemDescription.toLowerCase().includes(searchTerm.toLowerCase());
 
+        const finalStatus = getLineFinalStatus(line);
+
         const matchesStatus = 
           statusFilter === "All" ||
-          (statusFilter === "Review Required Only" && line.overallStatus === "Review Required") ||
-          (statusFilter === "On Hold Only" && line.overallStatus === "On Hold") ||
-          (statusFilter === "Review Required + On Hold" && (line.overallStatus === "Review Required" || line.overallStatus === "On Hold"));
+          (statusFilter === "Review Required Only" && finalStatus === "Review Required") ||
+          (statusFilter === "On Hold Only" && finalStatus === "On Hold") ||
+          (statusFilter === "Matched Only" && finalStatus === "Matched – Awaiting Human Sign-off") ||
+          (statusFilter === "Resolved Only" && finalStatus === "Resolved – Ready for Payment Authorisation") ||
+          (statusFilter === "Review Required + On Hold" && (finalStatus === "Review Required" || finalStatus === "On Hold"));
 
         const matchesException = 
           exceptionFilter === "All" || 
@@ -224,19 +235,14 @@ export default function Step3MatchingDashboard({
       // If multi-line, update other lines of the same invoice as well to ensure roll-up consistency
       if (inv.invoiceNumber === selectedLine?.invoiceNumber) {
         let newStatus = inv.overallStatus;
-        let finalReviewDecision = reviewDecision;
         
         if (isDuplicateException) {
           if (inv.recordId === selectedLine.recordId) {
              if (duplicateReviewDecision === "Confirmed Duplicate") {
                 newStatus = "On Hold";
              } else if (duplicateReviewDecision === "Not a Duplicate") {
-                // If not a duplicate, we should restore it to Review Required, and maybe it will pass on next rematch, 
-                // but the instructions say "restore the result produced by the three-way match". We can set it to Awaiting Department Approval if no other errors, 
-                // but the matching engine sets the default. We can flag duplicateReviewDecision to "Not a Duplicate" and let rematch handle it if we rematch.
-                // But this form just updates it directly. Let's set it to "Matched – Awaiting Department Approval" temporarily if there are no other exceptions.
                 const otherExceptions = (inv.exceptions || []).filter(e => !e.type.includes("Duplicate Warning"));
-                newStatus = otherExceptions.length > 0 ? (otherExceptions.some(e => e.severity === "On Hold") ? "On Hold" : "Review Required") : "Matched – Awaiting Department Approval";
+                newStatus = otherExceptions.length > 0 ? (otherExceptions.some(e => e.severity === "On Hold") ? "On Hold" : "Review Required") : "Resolved – Ready for Payment Authorisation";
              } else {
                 newStatus = "Review Required";
              }
@@ -247,12 +253,13 @@ export default function Step3MatchingDashboard({
             duplicateReviewDecision,
             duplicateReviewNotes: reviewNotes,
             duplicateReviewerName: reviewerName,
-            duplicateIdentifiedOriginalId: duplicateIdentifiedOriginalId
+            duplicateIdentifiedOriginalId: duplicateIdentifiedOriginalId,
+            duplicateReviewTimestamp: timestamp
           };
         } else {
           if (inv.recordId === selectedLine.recordId) {
             newStatus = reviewDecision === "Resolved – Send for Department Approval"
-              ? "Matched – Awaiting Department Approval"
+              ? "Resolved – Ready for Payment Authorisation"
               : reviewDecision === "Keep on Hold"
               ? "On Hold"
               : "Review Required";
@@ -273,12 +280,99 @@ export default function Step3MatchingDashboard({
       return inv;
     });
 
-    onUpdateInvoices(updatedInvoices);
+    // Roll up status using max severity score to keep invoice lines in sync
+    const severityScore = {
+      "On Hold": 4,
+      "Review Required": 3,
+      "Matched – Awaiting Human Sign-off": 2,
+      "Resolved – Ready for Payment Authorisation": 1,
+    };
+
+    const invoiceNumberToMaxSeverityLine = new Map<string, InvoiceLine>();
+    updatedInvoices.forEach((line) => {
+      const existing = invoiceNumberToMaxSeverityLine.get(line.invoiceNumber);
+      if (!existing) {
+        invoiceNumberToMaxSeverityLine.set(line.invoiceNumber, line);
+      } else {
+        const existingScore = severityScore[existing.overallStatus || "Matched – Awaiting Human Sign-off"] || 0;
+        const currentScore = severityScore[line.overallStatus || "Matched – Awaiting Human Sign-off"] || 0;
+        if (currentScore > existingScore) {
+          invoiceNumberToMaxSeverityLine.set(line.invoiceNumber, line);
+        }
+      }
+    });
+
+    const rolledInvoices = updatedInvoices.map((line) => {
+      const worstLine = invoiceNumberToMaxSeverityLine.get(line.invoiceNumber);
+      if (worstLine && worstLine.overallStatus !== line.overallStatus) {
+        return {
+          ...line,
+          overallStatus: worstLine.overallStatus,
+          exceptionType: worstLine.exceptionType,
+          suggestedFollowupParty: worstLine.suggestedFollowupParty,
+          followupStatus: worstLine.followupStatus
+        };
+      }
+      return line;
+    });
+
+    onUpdateInvoices(rolledInvoices);
     setSelectedLine(null);
   };
 
   const [exportError, setExportError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showExportConfirm, setShowExportConfirm] = useState(false);
+
+  // Helper to determine if an invoice is eligible for App 3 Handoff
+  const isInvoiceEligibleForHandoff = (invoiceLines: InvoiceLine[]): boolean => {
+    const hasResolvedLine = invoiceLines.some(l => {
+      const hr = l.humanReview;
+      return hr &&
+        hr.reviewDecision === "Resolved – Send for Department Approval" &&
+        hr.reviewerName && hr.reviewerName.trim() !== "" &&
+        hr.notes && hr.notes.trim() !== "" &&
+        hr.timestamp && hr.timestamp.trim() !== "";
+    });
+
+    if (!hasResolvedLine) {
+      return false;
+    }
+
+    const hasUnresolvedStatus = invoiceLines.some(l => 
+      l.overallStatus === "Review Required" || 
+      l.overallStatus === "On Hold" ||
+      l.followupStatus === "Pending Investigation"
+    );
+
+    if (hasUnresolvedStatus) {
+      return false;
+    }
+
+    return true;
+  };
+
+  // Compute counts for App 3 Handoff worksheet preview
+  const invoicesGroupedForCounting: Record<string, InvoiceLine[]> = {};
+  invoices.forEach((line) => {
+    const key = `${line.invoiceNumber}-${line.supplierName}`;
+    if (!invoicesGroupedForCounting[key]) {
+      invoicesGroupedForCounting[key] = [];
+    }
+    invoicesGroupedForCounting[key].push(line);
+  });
+
+  let resolvedCount = 0;
+  let excludedCount = 0;
+
+  Object.keys(invoicesGroupedForCounting).forEach((key) => {
+    const lines = invoicesGroupedForCounting[key];
+    if (isInvoiceEligibleForHandoff(lines)) {
+      resolvedCount++;
+    } else {
+      excludedCount++;
+    }
+  });
 
   const handleExport = () => {
     setExportError(null);
@@ -367,44 +461,87 @@ export default function Step3MatchingDashboard({
       ) : null}
 
       {/* KPI METRICS CARD GRID */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
         <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-3xs text-center">
           <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Lines</div>
           <div className="text-2xl font-bold text-gray-900 mt-1">{metrics.totalInvoiceLines}</div>
+          <div className="text-[10px] text-gray-400 font-medium mt-1">Ledger Records</div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-3xs text-center">
-          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Matched</div>
-          <div className="text-2xl font-bold text-green-600 mt-1 flex items-center justify-center space-x-1">
-            <CheckCircle2 className="h-5 w-5 shrink-0" />
+        <button
+          onClick={() => setStatusFilter(statusFilter === "Matched Only" ? "All" : "Matched Only")}
+          className={`p-4 rounded-xl border text-center transition-all cursor-pointer ${
+            statusFilter === "Matched Only"
+              ? "bg-emerald-50 border-emerald-300 ring-2 ring-emerald-100 text-emerald-800"
+              : "bg-white border-gray-100 hover:border-emerald-200 text-gray-900"
+          }`}
+        >
+          <div className="text-xs font-semibold text-emerald-600 uppercase tracking-wider">Matched</div>
+          <div className="text-2xl font-bold mt-1 flex items-center justify-center space-x-1">
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
             <span>{metrics.matched}</span>
           </div>
-        </div>
+          <div className="text-[10px] text-emerald-500 font-medium mt-1">Awaiting Sign-off</div>
+        </button>
 
-        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-3xs text-center">
-          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Needs Review</div>
-          <div className="text-2xl font-bold text-orange-600 mt-1 flex items-center justify-center space-x-1">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-orange-500" />
+        <button
+          onClick={() => setStatusFilter(statusFilter === "Review Required Only" ? "All" : "Review Required Only")}
+          className={`p-4 rounded-xl border text-center transition-all cursor-pointer ${
+            statusFilter === "Review Required Only"
+              ? "bg-amber-50 border-amber-300 ring-2 ring-amber-100 text-amber-800"
+              : "bg-white border-gray-100 hover:border-amber-200 text-gray-900"
+          }`}
+        >
+          <div className="text-xs font-semibold text-amber-600 uppercase tracking-wider">Needs Review</div>
+          <div className="text-2xl font-bold mt-1 flex items-center justify-center space-x-1">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
             <span>{metrics.reviewRequired}</span>
           </div>
-        </div>
+          <div className="text-[10px] text-amber-500 font-medium mt-1">Exception Found</div>
+        </button>
 
-        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-3xs text-center">
-          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">On Hold</div>
-          <div className="text-2xl font-bold text-red-600 mt-1 flex items-center justify-center space-x-1">
-            <Ban className="h-5 w-5 shrink-0" />
+        <button
+          onClick={() => setStatusFilter(statusFilter === "On Hold Only" ? "All" : "On Hold Only")}
+          className={`p-4 rounded-xl border text-center transition-all cursor-pointer ${
+            statusFilter === "On Hold Only"
+              ? "bg-red-50 border-red-300 ring-2 ring-red-100 text-red-800"
+              : "bg-white border-gray-100 hover:border-red-200 text-gray-900"
+          }`}
+        >
+          <div className="text-xs font-semibold text-red-600 uppercase tracking-wider">On Hold</div>
+          <div className="text-2xl font-bold mt-1 flex items-center justify-center space-x-1">
+            <Ban className="h-5 w-5 shrink-0 text-red-500" />
             <span>{metrics.onHold}</span>
           </div>
-        </div>
+          <div className="text-[10px] text-red-500 font-medium mt-1">Blockers Unresolved</div>
+        </button>
 
-        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-3xs text-center col-span-2 sm:col-span-1 lg:col-span-1">
+        <button
+          onClick={() => setStatusFilter(statusFilter === "Resolved Only" ? "All" : "Resolved Only")}
+          className={`p-4 rounded-xl border text-center transition-all cursor-pointer ${
+            statusFilter === "Resolved Only"
+              ? "bg-blue-50 border-blue-300 ring-2 ring-blue-100 text-blue-800"
+              : "bg-white border-gray-100 hover:border-blue-200 text-gray-900"
+          }`}
+        >
+          <div className="text-xs font-semibold text-blue-600 uppercase tracking-wider">RESOLVED</div>
+          <div className="text-2xl font-bold mt-1 flex items-center justify-center space-x-1">
+            <ShieldCheck className="h-5 w-5 shrink-0 text-blue-500" />
+            <span>{metrics.resolved}</span>
+          </div>
+          <div className="text-[10px] text-blue-500 font-medium mt-1">Ready for Payment Authorisation</div>
+        </button>
+
+        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-3xs text-center col-span-2 md:col-span-1">
           <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Value</div>
           <div className="text-xl font-extrabold text-gray-900 mt-1.5">${metrics.totalInvoiceValue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div className="text-[10px] text-gray-400 font-medium mt-1">Across Invoices</div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-3xs text-center col-span-2 sm:col-span-1 lg:col-span-1">
+        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-3xs text-center col-span-2 md:col-span-1">
           <div className="text-xs font-semibold text-red-500 uppercase tracking-wider">Value on Hold</div>
           <div className="text-xl font-extrabold text-red-700 mt-1.5">${metrics.totalValueOnHold.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div className="text-[10px] text-red-400 font-medium mt-1">Invoices Blocked</div>
         </div>
       </div>
 
@@ -430,7 +567,7 @@ export default function Step3MatchingDashboard({
 
           <div className="flex flex-wrap gap-2 w-full md:w-auto justify-end">
             <button
-              onClick={invoices.length === 0 ? undefined : handleExport}
+              onClick={invoices.length === 0 ? undefined : () => setShowExportConfirm(true)}
               disabled={invoices.length === 0}
               className={`flex items-center space-x-1.5 text-xs font-semibold px-4 py-2 rounded-lg shadow-sm transition ${
                 invoices.length === 0 
@@ -487,6 +624,80 @@ export default function Step3MatchingDashboard({
           </div>
         )}
 
+        {showExportConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-100">
+              <div className="p-6">
+                <div className="flex items-center space-x-3 mb-4">
+                  <div className="bg-indigo-50 text-indigo-600 p-2.5 rounded-full shrink-0">
+                    <Download className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900">MatchGuard Excel Export</h3>
+                    <p className="text-xs text-gray-500 font-medium">Handoff Validation & Verification Summary</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4 text-xs sm:text-sm text-gray-600">
+                  <p className="leading-relaxed">
+                    You are exporting the MatchGuard Audit Trail workbook. In accordance with internal control standards and the App 3 ingestion protocol, the <strong>App 3 Handoff</strong> worksheet has been filtered based on strict resolution guidelines.
+                  </p>
+
+                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 space-y-3.5">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="text-xs font-bold uppercase tracking-wider text-emerald-800 font-mono">App 3 Handoff Worksheet</div>
+                        <div className="text-xs text-gray-500 mt-0.5">Resolved invoices with completed human reviews</div>
+                      </div>
+                      <div className="text-right">
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-extrabold bg-emerald-100 text-emerald-800 shadow-3xs">
+                          {resolvedCount} Invoices
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="h-px bg-slate-200" />
+
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="text-xs font-bold uppercase tracking-wider text-slate-700 font-mono">Excluded from Handoff</div>
+                        <div className="text-xs text-gray-500 mt-0.5">Clean matches, on-hold, or pending investigation. Retained fully in other worksheets.</div>
+                      </div>
+                      <div className="text-right">
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-extrabold bg-slate-200 text-slate-800 shadow-3xs">
+                          {excludedCount} Invoices
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-gray-500 italic leading-relaxed">
+                    *Note: Clean matches or unresolved discrepancies are not eligible for direct ingestion and are excluded from the Handoff worksheet, but are fully preserved in the <strong>Match Results</strong>, <strong>Exception Log</strong>, and <strong>Input & Extraction Log</strong> worksheets.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end space-x-3">
+                <button
+                  onClick={() => setShowExportConfirm(false)}
+                  className="px-4 py-2 text-xs font-bold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    handleExport();
+                    setShowExportConfirm(false);
+                  }}
+                  className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition"
+                >
+                  Proceed with Export
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 border-t border-gray-100 pt-4 text-xs">
           <div>
             <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Status</label>
@@ -496,8 +707,10 @@ export default function Step3MatchingDashboard({
               className="w-full border border-gray-200 bg-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
               <option value="All">All Match Results</option>
+              <option value="Matched Only">Matched – Awaiting Human Sign-off</option>
               <option value="Review Required Only">Review Required Only</option>
               <option value="On Hold Only">On Hold Only</option>
+              <option value="Resolved Only">Resolved – Ready for Payment Authorisation</option>
               <option value="Review Required + On Hold">Review Required + On Hold</option>
             </select>
           </div>
@@ -586,24 +799,31 @@ export default function Step3MatchingDashboard({
                       ${line.invoiceTotal.toLocaleString("en-US", { minimumFractionDigits: 2 })}
                     </td>
                     <td className="px-4 py-3.5">
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide uppercase ${
-                          (line.overallStatus === "Matched – Awaiting Department Approval" || line.overallStatus?.includes("Matched"))
-                            ? "bg-green-50 text-green-700 border border-green-100"
-                            : line.overallStatus?.includes("Resolved")
-                            ? "bg-blue-50 text-blue-700 border border-blue-100"
-                            : line.overallStatus === "Review Required"
-                            ? "bg-orange-50 text-orange-700 border border-orange-100"
-                            : "bg-red-50 text-red-700 border border-red-100"
-                        }`}
-                      >
-                        {line.overallStatus}
-                      </span>
-                      {line.exceptionType && line.exceptionType !== "None" ? (
-                        <div className="text-[9px] text-gray-400 mt-0.5 italic">{line.exceptionType}</div>
-                      ) : line.overallStatus?.includes("Matched") ? (
-                        <div className="text-[9px] text-green-600 mt-0.5 italic font-medium">No discrepancies</div>
-                      ) : null}
+                      {(() => {
+                        const finalStatus = getLineFinalStatus(line);
+                        return (
+                          <>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide uppercase ${
+                                finalStatus === "Matched – Awaiting Human Sign-off"
+                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                                  : finalStatus === "Resolved – Ready for Payment Authorisation"
+                                  ? "bg-blue-50 text-blue-700 border border-blue-100"
+                                  : finalStatus === "Review Required"
+                                  ? "bg-orange-50 text-orange-700 border border-orange-100"
+                                  : "bg-red-50 text-red-700 border border-red-100"
+                              }`}
+                            >
+                              {finalStatus}
+                            </span>
+                            {line.exceptionType && line.exceptionType !== "None" && finalStatus !== "Resolved – Ready for Payment Authorisation" ? (
+                              <div className="text-[9px] text-gray-400 mt-0.5 italic">{line.exceptionType}</div>
+                            ) : finalStatus === "Matched – Awaiting Human Sign-off" ? (
+                              <div className="text-[9px] text-green-600 mt-0.5 italic font-medium">No discrepancies</div>
+                            ) : null}
+                          </>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3.5 text-gray-600 font-medium">{line.suggestedFollowupParty || "N/A"}</td>
                     <td className="px-4 py-3.5 text-right whitespace-nowrap">
@@ -654,110 +874,127 @@ export default function Step3MatchingDashboard({
               {/* Side-by-Side Comparison Body */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {/* Visual Mismatch Alert Header */}
-                {selectedLine.overallStatus === "Matched – Awaiting Department Approval" || selectedLine.overallStatus?.includes("Matched") ? (
-                  <div className="border p-5 rounded-2xl text-xs space-y-4 border-green-200 bg-green-50/30">
-                    <div className="font-bold flex items-center space-x-1.5 text-sm text-green-900">
-                      <CheckCircle2 className="h-4.5 w-4.5 shrink-0 text-green-600" />
-                      <span>Matching Successful: Awaiting Department Approval</span>
-                    </div>
-                    <div className="text-green-800">
-                      Invoice matches PO and GRN details perfectly. No discrepancies found.
-                    </div>
-                  </div>
-                ) : (
-                  <div className={`border p-5 rounded-2xl text-xs space-y-4 ${
-                    selectedLine.overallStatus === "Review Required"
-                      ? "border-orange-200 bg-orange-50/30"
-                      : "border-red-100 bg-red-50/30"
-                  }`}>
-                    <div className={`font-bold flex items-center space-x-1.5 text-sm ${
-                      selectedLine.overallStatus === "Review Required"
-                        ? "text-orange-900"
-                        : "text-red-900"
-                    }`}>
-                      {selectedLine.overallStatus === "Review Required" ? (
-                        <AlertTriangle className="h-4.5 w-4.5 shrink-0 text-orange-600" />
-                      ) : (
-                        <AlertOctagon className="h-4.5 w-4.5 shrink-0 text-red-600" />
-                      )}
-                      <span>Matching Discrepancy Flagged: {selectedLine.overallStatus}</span>
-                    </div>
-                    
-                    <div className="space-y-3">
-                      {selectedLine.exceptions && selectedLine.exceptions.length > 0 ? (
-                        selectedLine.exceptions.map((exc, excIdx) => (
-                          <div key={excIdx} className={`bg-white/80 p-3 rounded-lg border space-y-1.5 shadow-2xs ${
-                            selectedLine.overallStatus === "Review Required"
-                              ? "border-orange-100/60"
-                              : "border-red-100/60"
-                          }`}>
-                            <div className="flex items-center justify-between">
-                              <span className={`font-bold ${
-                                selectedLine.overallStatus === "Review Required"
-                                  ? "text-orange-800"
-                                  : "text-red-800"
-                              }`}>{excIdx + 1}. {exc.type}</span>
-                              <span className={`px-1.5 py-0.5 text-[9px] font-bold uppercase rounded ${
-                                selectedLine.overallStatus === "Review Required"
-                                  ? "bg-orange-100 text-orange-700"
-                                  : "bg-red-100 text-red-700"
-                              }`}>
-                                {exc.severity}
-                              </span>
-                            </div>
-                            <p className="text-gray-700 leading-relaxed font-medium">{exc.reason}</p>
-                            
-                            <div className={`grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1.5 text-[10px] border-t ${
-                              selectedLine.overallStatus === "Review Required"
-                                ? "border-orange-50"
-                                : "border-red-50/50"
-                            }`}>
-                              {exc.numericalDifference && (
-                                <div>
-                                  <strong className="text-gray-500 font-sans">Numerical Difference: </strong>
-                                  <span className={`font-mono font-semibold ${
-                                    selectedLine.overallStatus === "Review Required"
-                                      ? "text-orange-700"
-                                      : "text-red-700"
-                                  }`}>{exc.numericalDifference}</span>
-                                </div>
-                              )}
-                              {exc.requiredAction && (
-                                <div className="sm:col-span-2 font-sans">
-                                  <strong className="text-gray-500 font-sans">Required Action: </strong>
-                                  <span className="text-gray-700">{exc.requiredAction}</span>
-                                </div>
-                              )}
-                              <div>
-                                <strong className="text-gray-500 font-sans">Suggested Party: </strong>
-                                <span className="text-gray-600">{exc.suggestedFollowupParty}</span>
-                              </div>
-                              <div>
-                                <strong className="text-gray-500 font-sans">Follow-up Status: </strong>
-                                <span className="text-gray-600">{exc.followupStatus}</span>
-                              </div>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className={`bg-white/80 p-3 rounded-lg border space-y-1 ${
-                          selectedLine.overallStatus === "Review Required"
-                            ? "border-orange-100/60"
-                            : "border-red-100/60"
-                        }`}>
-                          <div className={`font-bold ${
-                            selectedLine.overallStatus === "Review Required"
-                              ? "text-orange-800"
-                              : "text-red-800"
-                          }`}>
-                            {selectedLine.exceptionType === "None" ? "No discrepancies" : selectedLine.exceptionType}
-                          </div>
-                          <div className="text-gray-700 leading-relaxed">{selectedLine.reason}</div>
+                {(() => {
+                  const sLineStatus = getLineFinalStatus(selectedLine);
+                  if (sLineStatus === "Resolved – Ready for Payment Authorisation") {
+                    return (
+                      <div className="border p-5 rounded-2xl text-xs space-y-4 border-blue-200 bg-blue-50/30">
+                        <div className="font-bold flex items-center space-x-1.5 text-sm text-blue-900">
+                          <ShieldCheck className="h-4.5 w-4.5 shrink-0 text-blue-600" />
+                          <span>Resolved – Ready for Payment Authorisation</span>
                         </div>
-                      )}
+                        <div className="text-blue-800">
+                          Exception review has been completed and signed off. Ready for export and handoff to payment systems.
+                        </div>
+                        {selectedLine.humanReview && (
+                          <div className="bg-white/80 p-3.5 rounded-xl border border-blue-100/60 mt-2 space-y-1.5">
+                            <div className="font-bold text-blue-900">Sign-Off Audit Log:</div>
+                            <div className="grid grid-cols-2 gap-2 text-gray-700">
+                              <div><strong>Reviewed By:</strong> {selectedLine.humanReview.reviewerName}</div>
+                              <div><strong>Timestamp:</strong> {selectedLine.humanReview.timestamp}</div>
+                              <div className="col-span-2"><strong>Review Notes:</strong> {selectedLine.humanReview.notes}</div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  if (sLineStatus === "Matched – Awaiting Human Sign-off") {
+                    return (
+                      <div className="border p-5 rounded-2xl text-xs space-y-4 border-green-200 bg-green-50/30">
+                        <div className="font-bold flex items-center space-x-1.5 text-sm text-green-900">
+                          <CheckCircle2 className="h-4.5 w-4.5 shrink-0 text-green-600" />
+                          <span>Matching Successful: Awaiting Human Sign-off</span>
+                        </div>
+                        <div className="text-green-800">
+                          Invoice matches PO and GRN details perfectly. No discrepancies found.
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Review Required or On Hold
+                  const isReviewRequired = sLineStatus === "Review Required";
+                  return (
+                    <div className={`border p-5 rounded-2xl text-xs space-y-4 ${
+                      isReviewRequired
+                        ? "border-orange-200 bg-orange-50/30"
+                        : "border-red-100 bg-red-50/30"
+                    }`}>
+                      <div className={`font-bold flex items-center space-x-1.5 text-sm ${
+                        isReviewRequired ? "text-orange-900" : "text-red-900"
+                      }`}>
+                        {isReviewRequired ? (
+                          <AlertTriangle className="h-4.5 w-4.5 shrink-0 text-orange-600" />
+                        ) : (
+                          <AlertOctagon className="h-4.5 w-4.5 shrink-0 text-red-600" />
+                        )}
+                        <span>Matching Discrepancy Flagged: {sLineStatus}</span>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        {selectedLine.exceptions && selectedLine.exceptions.length > 0 ? (
+                          selectedLine.exceptions.map((exc, excIdx) => (
+                            <div key={excIdx} className={`bg-white/80 p-3 rounded-lg border space-y-1.5 shadow-2xs ${
+                              isReviewRequired ? "border-orange-100/60" : "border-red-100/60"
+                            }`}>
+                              <div className="flex items-center justify-between">
+                                <span className={`font-bold ${
+                                  isReviewRequired ? "text-orange-800" : "text-red-800"
+                                }`}>{excIdx + 1}. {exc.type}</span>
+                                <span className={`px-1.5 py-0.5 text-[9px] font-bold uppercase rounded ${
+                                  isReviewRequired ? "bg-orange-100 text-orange-700" : "bg-red-100 text-red-700"
+                                }`}>
+                                  {exc.severity}
+                                </span>
+                              </div>
+                              <p className="text-gray-700 leading-relaxed font-medium">{exc.reason}</p>
+                              
+                              <div className={`grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1.5 text-[10px] border-t ${
+                                isReviewRequired ? "border-orange-50" : "border-red-50/50"
+                              }`}>
+                                {exc.numericalDifference && (
+                                  <div>
+                                    <strong className="text-gray-500 font-sans">Numerical Difference: </strong>
+                                    <span className={`font-mono font-semibold ${
+                                      isReviewRequired ? "text-orange-700" : "text-red-700"
+                                    }`}>{exc.numericalDifference}</span>
+                                  </div>
+                                )}
+                                {exc.requiredAction && (
+                                  <div className="sm:col-span-2 font-sans">
+                                    <strong className="text-gray-500 font-sans">Required Action: </strong>
+                                    <span className="text-gray-700">{exc.requiredAction}</span>
+                                  </div>
+                                )}
+                                <div>
+                                  <strong className="text-gray-500 font-sans">Suggested Party: </strong>
+                                  <span className="text-gray-600">{exc.suggestedFollowupParty}</span>
+                                </div>
+                                <div>
+                                  <strong className="text-gray-500 font-sans">Follow-up Status: </strong>
+                                  <span className="text-gray-600">{exc.followupStatus}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className={`bg-white/80 p-3 rounded-lg border space-y-1 ${
+                            isReviewRequired ? "border-orange-100/60" : "border-red-100/60"
+                          }`}>
+                            <div className={`font-bold ${
+                              isReviewRequired ? "text-orange-800" : "text-red-800"
+                            }`}>
+                              {selectedLine.exceptionType === "None" ? "No discrepancies" : selectedLine.exceptionType}
+                            </div>
+                            <div className="text-gray-700 leading-relaxed">{selectedLine.reason}</div>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
                 
                 {/* 3-Column Document Board */}
                 {(() => {

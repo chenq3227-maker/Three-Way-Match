@@ -106,7 +106,7 @@ export default function App() {
       lastMatchInvoices !== getRawInvoicesString(invoices) ||
       lastMatchPOs !== getRawPOsString(poLines) ||
       lastMatchGRNs !== getRawGRNsString(grnLines) ||
-      invoices.some((inv) => !inv.exceptions || inv.exceptions.length === 0 && inv.overallStatus !== "Matched – Awaiting Department Approval")
+      invoices.some((inv) => !inv.exceptions || inv.exceptions.length === 0 && inv.overallStatus !== "Matched – Awaiting Human Sign-off")
     );
 
   // Mark currently loaded batch as stale and display "Re-upload Required" if they don't match the updated parser
@@ -245,9 +245,9 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-md font-sans font-extrabold tracking-tight text-gray-900">
-              Three-Way Matching Ledger
+              MatchGuard
             </h1>
-            <p className="text-[10px] text-gray-400 font-mono tracking-wider">AP CONTROL SYSTEM</p>
+            <p className="text-[10px] text-gray-400 font-mono tracking-wider">Three-Way Invoice Matching</p>
           </div>
         </div>
         <div className="flex items-center space-x-4">

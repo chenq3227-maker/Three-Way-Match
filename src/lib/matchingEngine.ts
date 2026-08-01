@@ -4,6 +4,7 @@
  */
 
 import { InvoiceLine, POLine, GRNLine, ColumnMapping } from "../types";
+import { getLineFinalStatus } from "./statusHelper";
 
 /**
  * Checks if a value is blank, N/A, Not Available or other forms of missing information.
@@ -615,7 +616,7 @@ export function runThreeWayMatch(
     }
 
     // Determine overall status using the most serious exception
-    let worstSeverity: "On Hold" | "Review Required" | "Matched – Awaiting Department Approval" = "Matched – Awaiting Department Approval";
+    let worstSeverity: "On Hold" | "Review Required" | "Matched – Awaiting Human Sign-off" = "Matched – Awaiting Human Sign-off";
     if (exceptions.some((e) => e.severity === "On Hold")) {
       worstSeverity = "On Hold";
     } else if (exceptions.some((e) => e.severity === "Review Required")) {
@@ -624,7 +625,7 @@ export function runThreeWayMatch(
 
     if (exceptions.length === 0) {
       const grnNumbers = grnLines.filter((g) => normalizeText(g.poNumber) === normalizeText(updatedLine.poNumber)).map((g) => g.grnNumber).join(", ");
-      updatedLine.overallStatus = "Matched – Awaiting Department Approval";
+      updatedLine.overallStatus = "Matched – Awaiting Human Sign-off";
       updatedLine.exceptionType = "None";
       updatedLine.reason = `Invoice matches PO ${updatedLine.poNumber} and Goods Received Notes (${grnNumbers || "None"}) perfectly. Quantities and pricing correspond.`;
       updatedLine.suggestedFollowupParty = "End User Department";
@@ -644,11 +645,18 @@ export function runThreeWayMatch(
 
   // Apply human review overrides if present
   const overriddenLines = matchedLines.map((line): InvoiceLine => {
+    // Determine if resolved
+    const finalStatus = getLineFinalStatus(line);
+    if (finalStatus === "Resolved – Ready for Payment Authorisation") {
+      return {
+        ...line,
+        overallStatus: "Resolved – Ready for Payment Authorisation",
+        followupStatus: "Resolved – Send for Department Approval"
+      };
+    }
     if (line.humanReview) {
       const decision = line.humanReview.reviewDecision;
-      const overriddenStatus = (decision === "Resolved – Send for Department Approval"
-        ? "Matched – Awaiting Department Approval"
-        : decision === "Keep on Hold"
+      const overriddenStatus = (decision === "Keep on Hold"
         ? "On Hold"
         : "Review Required") as InvoiceLine["overallStatus"];
       return {
@@ -657,14 +665,18 @@ export function runThreeWayMatch(
         followupStatus: decision,
       };
     }
-    return line;
+    return {
+      ...line,
+      overallStatus: finalStatus
+    };
   });
 
   // Step 3: Roll up line results to invoice headers (using severity score)
   const severityScore = {
     "On Hold": 4,
     "Review Required": 3,
-    "Matched – Awaiting Department Approval": 1,
+    "Matched – Awaiting Human Sign-off": 2,
+    "Resolved – Ready for Payment Authorisation": 1,
   };
 
   const invoiceNumberToMaxSeverityLine = new Map<string, InvoiceLine>();
@@ -673,8 +685,8 @@ export function runThreeWayMatch(
     if (!existing) {
       invoiceNumberToMaxSeverityLine.set(line.invoiceNumber, line);
     } else {
-      const existingScore = severityScore[existing.overallStatus || "Matched – Awaiting Department Approval"] || 0;
-      const currentScore = severityScore[line.overallStatus || "Matched – Awaiting Department Approval"] || 0;
+      const existingScore = severityScore[existing.overallStatus || "Matched – Awaiting Human Sign-off"] || 0;
+      const currentScore = severityScore[line.overallStatus || "Matched – Awaiting Human Sign-off"] || 0;
       if (currentScore > existingScore) {
         invoiceNumberToMaxSeverityLine.set(line.invoiceNumber, line);
       }

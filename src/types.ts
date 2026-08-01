@@ -79,7 +79,7 @@ export interface InvoiceLine {
 
   // Calculated matching results
   calculatedLineAmount?: number;
-  overallStatus?: "Matched – Awaiting Department Approval" | "Review Required" | "On Hold";
+  overallStatus?: "Matched – Awaiting Human Sign-off" | "Matched – Awaiting Department Approval" | "Review Required" | "On Hold" | "Resolved – Ready for Payment Authorisation";
   exceptionType?: string;
   reason?: string;
   suggestedFollowupParty?: string;
@@ -230,6 +230,7 @@ export interface MatchSummary {
   matched: number;
   reviewRequired: number;
   onHold: number;
+  resolved: number;
   totalInvoiceValue: number;
   totalValueOnHold: number;
 }
